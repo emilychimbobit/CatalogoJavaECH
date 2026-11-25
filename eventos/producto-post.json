@@ -1,0 +1,14 @@
+{
+  "version": "2.0",
+  "routeKey": "POST /productos",
+  "rawPath": "/productos",
+  "rawQueryString": "",
+  "requestContext": {
+    "http": {
+      "method": "POST",
+      "path": "/productos"
+    }
+  },
+  "body": "{\"id\":4,\"nombre\":\"Monitor\",\"precio\":180}",
+  "isBase64Encoded": false
+}

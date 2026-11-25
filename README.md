@@ -62,6 +62,18 @@ GET /productos/abc → HTTP 400
 {"error":"El ID debe contener de 1 a 10 dígitos"}
 ```
 
+Para agregar un producto, envía `POST /productos` con un cuerpo como:
+
+```json
+{"id":4,"nombre":"Monitor","precio":180}
+```
+
+La función responde con HTTP 201 y guarda cada producto como una línea JSON en
+`productos.txt`. Puedes consultar después ese producto con `GET /productos/4`.
+En AWS Lambda, el archivo se guarda en `/tmp/productos.txt`, que es temporal y
+se mantiene solo durante la vida del entorno de ejecución. Para almacenamiento
+permanente se debe reemplazar por un servicio como Amazon S3 o DynamoDB.
+
 | Si ves este mensaje | Comprueba lo siguiente |
 |---|---|
 | `file not found` | Vuelve al paso 3 y confirma que la terminal está en la carpeta extraída que contiene `src`. |
@@ -79,7 +91,7 @@ GET /productos/abc → HTTP 400
 1. Crea una función Lambda con runtime **Java 21**, tipo de paquete **ZIP** y un rol de ejecución básico autorizado para escribir registros en CloudWatch.
 2. En la función, abre **Código → Cargar desde → Archivo .zip o .jar** y selecciona `catalogo-lambda.jar`. En la configuración del runtime, establece el handler `academy.aws.CatalogoHandler::handleRequest`.
 3. Desde **Probar** en Lambda, copia el contenido de los archivos de la carpeta `eventos` y ejecuta los tres casos. Comprueba `statusCode` y `body` en el resultado. Esta prueba funciona antes de crear API Gateway.
-4. Cuando se habilite la práctica de API Gateway, crea una **HTTP API** con una integración Lambda proxy de formato **2.0**. Asocia la ruta `GET /productos/{id}` a la función y prueba la URL del stage añadiendo `/productos/1`, `/productos/99` y `/productos/abc`.
+4. Cuando se habilite la práctica de API Gateway, crea una **HTTP API** con una integración Lambda proxy de formato **2.0**. Asocia las rutas `GET /productos/{id}` y `POST /productos` a la función y prueba el alta y la consulta de un producto.
 
 El ZIP del material contiene el proyecto y el JAR compilado. Para Lambda se carga el JAR que está dentro del ZIP.
 
