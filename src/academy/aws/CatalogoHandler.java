@@ -13,11 +13,22 @@ public final class CatalogoHandler {
     );
 
     public Map<String, Object> handleRequest(Map<String, Object> evento) {
-        // API Gateway coloca {id} en pathParameters.
-        if (evento == null
-                || !(evento.get("pathParameters") instanceof Map<?, ?> parametros)
-                || !(parametros.get("id") instanceof String id)
-                || !id.matches("[0-9]{1,10}")) {
+        String id = null;
+
+        if (evento != null) {
+            if (evento.get("pathParameters") instanceof Map<?, ?> parametrosRuta
+                    && parametrosRuta.get("id") instanceof String idRuta) {
+                id = idRuta;
+            }
+
+            if (id == null
+                    && evento.get("queryStringParameters") instanceof Map<?, ?> parametrosConsulta
+                    && parametrosConsulta.get("id") instanceof String idConsulta) {
+                id = idConsulta;
+            }
+        }
+
+        if (id == null || !id.matches("[0-9]{1,10}")) {
             return respuesta(400, """
                 {"error":"El ID debe contener de 1 a 10 dígitos"}
                 """.strip());
