@@ -1,0 +1,116 @@
+name: Catálogo Java · CI/CD
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    name: Compilar, probar y empaquetar
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Compilar y probar GET con el mismo evento que API Gateway
+        shell: bash
+        run: |
+          mkdir -p build-ci/classes build-ci/package/lib
+          javac -encoding UTF-8 -d build-ci/classes src/academy/aws/*.java
+          cat > build-ci/VerificarCatalogo.java <<'JAVA'
+          import academy.aws.CatalogoHandler;
+          import java.util.Map;
+
+          class VerificarCatalogo {
+              public static void main(String[] args) {
+                  var handler = new CatalogoHandler();
+                  verificar(handler, "1", 200);
+                  verificar(handler, "9999999999", 404);
+                  verificar(handler, "abc", 400);
+              }
+
+              private static void verificar(CatalogoHandler handler, String id, int esperado) {
+                  Map<String, Object> evento = Map.of(
+                      "version", "2.0",
+                      "routeKey", "GET /productos/{id}",
+                      "requestContext", Map.of("http", Map.of("method", "GET")),
+                      "pathParameters", Map.of("id", id)
+                  );
+                  var respuesta = handler.handleRequest(evento);
+                  if (!Integer.valueOf(esperado).equals(respuesta.get("statusCode"))) {
+                      throw new AssertionError("ID " + id + ": " + respuesta);
+                  }
+                  System.out.println("ID " + id + " -> " + esperado);
+              }
+          }
+          JAVA
+          PRODUCTOS_FILE_PATH="$PWD/build-ci/productos-prueba.txt" \
+            java -cp build-ci/classes build-ci/VerificarCatalogo.java
+
+      - name: Empaquetar todas las clases para Lambda
+        shell: bash
+        run: |
+          jar --create --file build-ci/package/lib/catalogo.jar -C build-ci/classes academy/aws
+          (cd build-ci/package && zip -q ../catalogo-lambda.zip lib/catalogo.jar)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: catalogo-lambda
+          path: build-ci/catalogo-lambda.zip
+          if-no-files-found: error
+          retention-days: 7
+
+  cd:
+    name: Desplegar y verificar Lambda
+    if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && vars.AWS_DEPLOY_ROLE_ARN != '' }}
+    needs: ci
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      id-token: write
+      contents: read
+    concurrency:
+      group: catalogo-lambda-deploy
+      cancel-in-progress: false
+    env:
+      LAMBDA_FUNCTION_NAME: ${{ vars.LAMBDA_FUNCTION_NAME }}
+      AWS_PAGER: ''
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: catalogo-lambda
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Actualizar la función existente y esperar el despliegue
+        shell: bash
+        run: |
+          aws lambda update-function-code --function-name "${LAMBDA_FUNCTION_NAME:?Configura LAMBDA_FUNCTION_NAME}" \
+            --zip-file fileb://catalogo-lambda.zip --query '{Funcion:FunctionName,Huella:CodeSha256}'
+          aws lambda wait function-updated --function-name "$LAMBDA_FUNCTION_NAME"
+
+      - name: Comprobar que el catálogo desplegado responde
+        shell: bash
+        run: |
+          aws lambda invoke --function-name "$LAMBDA_FUNCTION_NAME" \
+            --cli-binary-format raw-in-base64-out \
+            --payload '{"version":"2.0","requestContext":{"http":{"method":"GET"}},"pathParameters":{"id":"1"}}' \
+            respuesta.json > invocacion.json
+          jq -e '.StatusCode == 200 and (has("FunctionError") | not)' invocacion.json
+          jq -e '.statusCode == 200 and (.body | fromjson | .id == 1)' respuesta.json
