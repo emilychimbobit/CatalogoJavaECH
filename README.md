@@ -60,3 +60,4 @@ Ten a mano tu repositorio y el nombre y la región de tu Lambda. Sigue el Día 3
 - Para API Gateway, usa una **HTTP API** con integración Lambda proxy **2.0**. Registra las rutas de la tabla que quieras probar.
 
 Si necesitas comprobar la integración existente desde **Probar** en Lambda, usa los eventos de ejemplo de la carpeta `eventos/`.
+
