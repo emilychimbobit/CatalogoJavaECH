@@ -5,18 +5,19 @@ import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardOpenOption;
-import java.util.List;
+import java.nio.file.StandardCopyOption;
+import java.util.LinkedHashMap;
+import java.util.Locale;
 import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public final class CatalogoHandler {
-    private static final Pattern CAMPO_TEXTO = Pattern.compile(
-        "\"(?<campo>[^\"]+)\"\\s*:\\s*\"(?<valor>(?:\\\\.|[^\"\\\\])*)\""
-    );
-    private static final Pattern CAMPO_NUMERO = Pattern.compile(
-        "\"(?<campo>[^\"]+)\"\\s*:\\s*(?<valor>-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?)"
+    private static final String TEXTO_JSON = "\"(?:\\\\(?:[\"\\\\/bfnrt]|u[0-9a-fA-F]{4})|[^\"\\\\\\x00-\\x1f])*\"";
+    private static final String NUMERO_JSON = "-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?(?:[eE][+-]?[0-9]+)?";
+    private static final Pattern CAMPO_JSON = Pattern.compile(
+        "\\s*(?<clave>" + TEXTO_JSON + ")\\s*:\\s*"
+            + "(?<valor>" + TEXTO_JSON + "|" + NUMERO_JSON + "|true|false|null)\\s*"
     );
     private static final Map<String, String> PRODUCTOS = Map.of(
         "1", """
@@ -31,153 +32,197 @@ public final class CatalogoHandler {
     );
 
     public Map<String, Object> handleRequest(Map<String, Object> evento) {
-        String metodo = obtenerMetodo(evento);
-        if ("POST".equals(metodo)) {
-            return agregarProducto(evento);
-        }
-        if (!"GET".equals(metodo)) {
-            return respuesta(405, """
-                {"error":"Método no permitido"}
-                """.strip());
-        }
-
-        String id = null;
-
-        if (evento != null) {
-            if (evento.get("pathParameters") instanceof Map<?, ?> parametrosRuta
-                    && parametrosRuta.get("id") instanceof String idRuta) {
-                id = idRuta;
-            }
-
-            if (id == null
-                    && evento.get("queryStringParameters") instanceof Map<?, ?> parametrosConsulta
-                    && parametrosConsulta.get("id") instanceof String idConsulta) {
-                id = idConsulta;
-            }
-        }
-
-        if (id == null || !id.matches("[0-9]{1,10}")) {
-            return respuesta(400, """
-                {"error":"El ID debe contener de 1 a 10 dígitos"}
-                """.strip());
-        }
-
-        String producto = PRODUCTOS.get(id);
-        if (producto == null) {
-            try {
-                producto = buscarProductoGuardado(id);
-            } catch (IOException excepcion) {
-                return respuesta(500, errorJson(
-                    "No se pudo consultar el archivo de productos: " + excepcion.getMessage()
-                ));
-            }
-        }
-        if (producto == null) {
-            return respuesta(404, """
-                {"error":"Producto no encontrado"}
-                """.strip());
-        }
-
-        return respuesta(200, producto);
+        return procesarEvento(evento);
     }
 
-    private static synchronized Map<String, Object> agregarProducto(Map<String, Object> evento) {
-        String cuerpo = evento != null && evento.get("body") instanceof String body
-            ? body
-            : null;
-        if (cuerpo == null || cuerpo.isBlank()) {
-            return respuesta(400, """
-                {"error":"Envía el producto como JSON raw en el body"}
-                """.strip());
-        }
-
+    // Las operaciones sobre el TXT comparten un bloqueo dentro de esta JVM.
+    private static synchronized Map<String, Object> procesarEvento(Map<String, Object> evento) {
         try {
-            Producto nuevo = parsearProducto(cuerpo);
-            Path archivo = archivoProductos();
-
-            if (PRODUCTOS.containsKey(nuevo.id())
-                    || buscarProductoGuardado(nuevo.id()) != null) {
-                return respuesta(409, """
-                    {"error":"Ya existe un producto con ese ID"}
-                    """.strip());
-            }
-
-            Files.createDirectories(archivo.toAbsolutePath().getParent());
-            Files.writeString(
-                archivo,
-                nuevo.aJson() + System.lineSeparator(),
-                StandardCharsets.UTF_8,
-                StandardOpenOption.CREATE,
-                StandardOpenOption.APPEND
-            );
-            return respuesta(201, nuevo.aJson());
+            return switch (obtenerMetodo(evento)) {
+                case "GET" -> consultar(evento);
+                case "POST" -> crear(evento);
+                case "PUT" -> actualizar(evento);
+                default -> respuesta(405, errorJson("Método no permitido"));
+            };
         } catch (IllegalArgumentException excepcion) {
             return respuesta(400, errorJson(excepcion.getMessage()));
         } catch (IOException excepcion) {
-            return respuesta(500, errorJson(
-                "No se pudo guardar el producto en el archivo: " + excepcion.getMessage()
-            ));
+            return respuesta(500, errorJson("No se pudo leer o guardar el archivo de productos"));
         }
     }
 
-    private static Producto parsearProducto(String cuerpo) {
-        String id = valorTexto(cuerpo, "id");
-        if (id == null) {
-            id = valorNumero(cuerpo, "id");
+    private static Map<String, Object> consultar(Map<String, Object> evento) throws IOException {
+        String id = obtenerId(evento);
+        if (id == null && !esRutaDeProducto(evento)) {
+            var catalogo = new LinkedHashMap<String, String>();
+            PRODUCTOS.entrySet().stream().sorted(Map.Entry.comparingByKey())
+                .forEach(producto -> catalogo.put(producto.getKey(), producto.getValue()));
+            leerProductos().forEach(catalogo::putIfAbsent);
+            return respuesta(200, "[" + String.join(",", catalogo.values()) + "]");
         }
 
-        String nombre = valorTexto(cuerpo, "nombre");
-        String precio = valorNumero(cuerpo, "precio");
+        id = validarId(id);
+        String producto = PRODUCTOS.get(id);
+        if (producto == null) {
+            producto = leerProductos().get(id);
+        }
+        return producto == null
+            ? respuesta(404, errorJson("Producto no encontrado"))
+            : respuesta(200, producto);
+    }
 
+    private static Map<String, Object> crear(Map<String, Object> evento) throws IOException {
+        var campos = leerCuerpo(evento);
+        String id = validarId(valorId(campos));
+        Producto nuevo = construirProducto(id, campos);
+        var guardados = leerProductos();
+        if (PRODUCTOS.containsKey(id) || guardados.containsKey(id)) {
+            return respuesta(409, errorJson("Ya existe un producto con ese ID"));
+        }
+
+        guardados.put(id, nuevo.aJson());
+        guardarProductos(guardados);
+        return respuesta(201, nuevo.aJson());
+    }
+
+    private static Map<String, Object> actualizar(Map<String, Object> evento) throws IOException {
+        String id = validarId(obtenerId(evento));
+        var campos = leerCuerpo(evento);
+        if (campos.containsKey("id")) {
+            throw new IllegalArgumentException("Envía el ID en la URL y solo nombre y precio en el cuerpo");
+        }
+        Producto actualizado = construirProducto(id, campos);
+        var guardados = leerProductos();
+        if (PRODUCTOS.containsKey(id) || !guardados.containsKey(id)) {
+            return respuesta(404, errorJson("Producto no encontrado en el TXT"));
+        }
+
+        guardados.put(id, actualizado.aJson());
+        guardarProductos(guardados);
+        return respuesta(200, actualizado.aJson());
+    }
+
+    private static String obtenerId(Map<String, Object> evento) {
+        if (evento != null && evento.get("pathParameters") instanceof Map<?, ?> ruta
+                && ruta.get("id") instanceof String id) {
+            return id;
+        }
+        if (evento != null && evento.get("queryStringParameters") instanceof Map<?, ?> consulta
+                && consulta.get("id") instanceof String id) {
+            return id;
+        }
+        return null;
+    }
+
+    private static boolean esRutaDeProducto(Map<String, Object> evento) {
+        return evento != null && evento.get("routeKey") instanceof String ruta
+            && ruta.endsWith("/{id}");
+    }
+
+    private static String validarId(String id) {
         if (id == null || !id.matches("[0-9]{1,10}")) {
-            throw new IllegalArgumentException(
-                "El ID debe ser numérico y contener de 1 a 10 dígitos"
-            );
+            throw new IllegalArgumentException("El ID debe contener de 1 a 10 dígitos");
         }
+        return Long.toString(Long.parseLong(id));
+    }
+
+    private static Producto construirProducto(String id, Map<String, String> campos) {
+        String nombre = valorTexto(campos.get("nombre"));
         if (nombre == null || nombre.isBlank()) {
             throw new IllegalArgumentException("El nombre no puede estar vacío");
         }
-        if (precio == null || new BigDecimal(precio).compareTo(BigDecimal.ZERO) < 0) {
+
+        String valor = campos.get("precio");
+        if (valor == null || !valor.matches(NUMERO_JSON)) {
             throw new IllegalArgumentException("El precio debe ser un número mayor o igual a cero");
         }
-
-        return new Producto(id, decodificarJson(nombre), new BigDecimal(precio).toPlainString());
+        BigDecimal precio = new BigDecimal(valor);
+        if (precio.signum() < 0) {
+            throw new IllegalArgumentException("El precio debe ser un número mayor o igual a cero");
+        }
+        return new Producto(id, nombre, precio.toString());
     }
 
-    private static String buscarProductoGuardado(String id) throws IOException {
+    private static Map<String, String> leerCuerpo(Map<String, Object> evento) {
+        if (evento != null && evento.get("body") instanceof String cuerpo) {
+            return leerObjetoJson(cuerpo);
+        }
+        throw new IllegalArgumentException("Envía el producto como JSON raw en el body");
+    }
+
+    // El producto es un objeto plano con valores escalares.
+    private static Map<String, String> leerObjetoJson(String json) {
+        String objeto = json.trim();
+        if (!objeto.startsWith("{") || !objeto.endsWith("}")) {
+            throw new IllegalArgumentException("El cuerpo debe ser un objeto JSON");
+        }
+
+        String interior = objeto.substring(1, objeto.length() - 1).trim();
+        var campos = new LinkedHashMap<String, String>();
+        if (interior.isEmpty()) {
+            return campos;
+        }
+
+        Matcher campo = CAMPO_JSON.matcher(interior);
+        int inicio = 0;
+        while (campo.region(inicio, interior.length()).lookingAt()) {
+            String clave = valorTexto(campo.group("clave"));
+            if (campos.putIfAbsent(clave, campo.group("valor")) != null) {
+                throw new IllegalArgumentException("El JSON contiene un campo repetido: " + clave);
+            }
+            int fin = campo.end();
+            if (fin == interior.length()) {
+                return campos;
+            }
+            if (interior.charAt(fin) != ',') {
+                break;
+            }
+            inicio = fin + 1;
+        }
+        throw new IllegalArgumentException("El cuerpo contiene un JSON inválido");
+    }
+
+    private static String valorTexto(String valor) {
+        return valor != null && valor.startsWith("\"")
+            ? decodificarJson(valor.substring(1, valor.length() - 1))
+            : null;
+    }
+
+    private static String valorId(Map<String, String> campos) {
+        String valor = campos.get("id");
+        return valor != null && valor.startsWith("\"") ? valorTexto(valor) : valor;
+    }
+
+    private static Map<String, String> leerProductos() throws IOException {
         Path archivo = archivoProductos();
-        if (!Files.exists(archivo)) {
-            return null;
+        var productos = new LinkedHashMap<String, String>();
+        if (Files.notExists(archivo)) {
+            return productos;
         }
-
-        List<String> lineas = Files.readAllLines(archivo, StandardCharsets.UTF_8);
-        for (int indice = lineas.size() - 1; indice >= 0; indice--) {
-            String linea = lineas.get(indice).trim();
-            if (!linea.isEmpty() && id.equals(valorNumero(linea, "id"))) {
-                return linea;
+        for (String linea : Files.readAllLines(archivo, StandardCharsets.UTF_8)) {
+            if (!linea.isBlank()) {
+                try {
+                    var campos = leerObjetoJson(linea);
+                    productos.put(validarId(valorId(campos)), linea.strip());
+                } catch (IllegalArgumentException excepcion) {
+                    throw new IOException("Registro inválido en el TXT", excepcion);
+                }
             }
         }
-        return null;
+        return productos;
     }
 
-    private static String valorTexto(String json, String campo) {
-        Matcher matcher = CAMPO_TEXTO.matcher(json);
-        while (matcher.find()) {
-            if (campo.equals(decodificarJson(matcher.group("campo")))) {
-                return matcher.group("valor");
-            }
+    private static void guardarProductos(Map<String, String> productos) throws IOException {
+        Path archivo = archivoProductos().toAbsolutePath();
+        Path carpeta = Files.createDirectories(archivo.getParent());
+        Path temporal = Files.createTempFile(carpeta, "productos-", ".tmp");
+        try {
+            Files.write(temporal, productos.values(), StandardCharsets.UTF_8);
+            Files.move(temporal, archivo, StandardCopyOption.REPLACE_EXISTING,
+                StandardCopyOption.ATOMIC_MOVE);
+        } finally {
+            Files.deleteIfExists(temporal);
         }
-        return null;
-    }
-
-    private static String valorNumero(String json, String campo) {
-        Matcher matcher = CAMPO_NUMERO.matcher(json);
-        while (matcher.find()) {
-            if (campo.equals(decodificarJson(matcher.group("campo")))) {
-                return matcher.group("valor");
-            }
-        }
-        return null;
     }
 
     private static String obtenerMetodo(Map<String, Object> evento) {
@@ -185,17 +230,17 @@ public final class CatalogoHandler {
             return "GET";
         }
         if (evento.get("httpMethod") instanceof String metodoRest) {
-            return metodoRest.toUpperCase();
+            return metodoRest.toUpperCase(Locale.ROOT);
         }
         if (evento.get("requestContext") instanceof Map<?, ?> contexto
                 && contexto.get("http") instanceof Map<?, ?> http
                 && http.get("method") instanceof String metodoHttp) {
-            return metodoHttp.toUpperCase();
+            return metodoHttp.toUpperCase(Locale.ROOT);
         }
         if (evento.get("routeKey") instanceof String routeKey) {
             String[] partes = routeKey.split("\\s+", 2);
             if (partes.length == 2) {
-                return partes[0].toUpperCase();
+                return partes[0].toUpperCase(Locale.ROOT);
             }
         }
         return "GET";
