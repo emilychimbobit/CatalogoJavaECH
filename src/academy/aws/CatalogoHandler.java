@@ -6,7 +6,6 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
-import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 import java.util.regex.Matcher;
@@ -83,17 +82,12 @@ public final class CatalogoHandler {
     }
 
     private static synchronized Map<String, Object> agregarProducto(Map<String, Object> evento) {
-        String cuerpo;
-        try {
-            cuerpo = obtenerCuerpo(evento);
-        } catch (IllegalArgumentException excepcion) {
-            return respuesta(400, """
-                {"error":"El cuerpo Base64 no es válido"}
-                """.strip());
-        }
+        String cuerpo = evento != null && evento.get("body") instanceof String body
+            ? body
+            : null;
         if (cuerpo == null || cuerpo.isBlank()) {
             return respuesta(400, """
-                {"error":"El cuerpo debe contener un producto en formato JSON"}
+                {"error":"Envía el producto como JSON raw en el body"}
                 """.strip());
         }
 
@@ -124,16 +118,6 @@ public final class CatalogoHandler {
                 "No se pudo guardar el producto en el archivo: " + excepcion.getMessage()
             ));
         }
-    }
-
-    private static String obtenerCuerpo(Map<String, Object> evento) {
-        if (evento == null || !(evento.get("body") instanceof String cuerpo)) {
-            return null;
-        }
-        if (Boolean.TRUE.equals(evento.get("isBase64Encoded"))) {
-            return new String(Base64.getDecoder().decode(cuerpo), StandardCharsets.UTF_8);
-        }
-        return cuerpo;
     }
 
     private static Producto parsearProducto(String cuerpo) {
