@@ -1,5 +1,6 @@
 package academy.aws;
 
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 public final class DemoLocal {
@@ -9,46 +10,55 @@ public final class DemoLocal {
             throw new IllegalArgumentException("Indica un ID libre de 1 a 10 dígitos");
         }
 
-        var handler = new CatalogoHandler();
-        var crear = Map.<String, Object>of(
-            "routeKey", "POST /productos",
-            "body", """
-                {"id":"%s","nombre":"Monitor","precio":180}
-                """.formatted(id)
-        );
-        var actualizar = Map.<String, Object>of(
-            "routeKey", "PUT /",
-            "queryStringParameters", Map.of("id", id),
-            "body", """
-                {"nombre":"Monitor HD","precio":195}
-                """
-        );
+        String variante = args.length < 2 ? "con-prefijo" : args[1];
+        boolean conPrefijo = switch (variante) {
+            case "con-prefijo" -> true;
+            case "sin-prefijo" -> false;
+            default -> throw new IllegalArgumentException("Usa con-prefijo o sin-prefijo");
+        };
+        System.out.println("Rutas de la práctica: " + variante);
 
+        var handler = new CatalogoHandler();
+        String producto = """
+            {"id":"%s","nombre":"Monitor","precio":180}
+            """.formatted(id);
+        String cambios = """
+            {"nombre":"Monitor HD","precio":195}
+            """;
+
+        var crear = evento(conPrefijo, "POST", null, producto);
         probar(handler, "POST para crear", crear, 201);
         probar(handler, "POST duplicado", crear, 409);
-        probar(handler, "PUT para actualizar", actualizar, 200);
-        probar(handler, "GET por ID", consulta(id), 200);
-        probar(handler, "GET para listar", Map.of("routeKey", "GET /productos"), 200);
+        probar(handler, "PUT para actualizar", evento(conPrefijo, "PUT", id, cambios), 200);
+        probar(handler, "GET por ID", evento(conPrefijo, "GET", id, null), 200);
+        probar(handler, "GET para listar", evento(conPrefijo, "GET", null, null), 200);
 
         long candidato = 0;
-        while (Integer.valueOf(200).equals(handler.handleRequest(consulta(Long.toString(candidato))).get("statusCode"))) {
+        while (Integer.valueOf(200).equals(handler.handleRequest(
+                evento(conPrefijo, "GET", Long.toString(candidato), null)).get("statusCode"))) {
             candidato++;
         }
-        probar(handler, "PUT con ID inexistente", Map.of(
-            "routeKey", "PUT /productos/{id}",
-            "pathParameters", Map.of("id", Long.toString(candidato)),
-            "body", actualizar.get("body")
-        ), 404);
-        probar(handler, "POST con precio negativo", Map.of(
-            "routeKey", "POST /productos",
-            "body", """
-                {"id":"%s","nombre":"Monitor","precio":-1}
-                """.formatted(id)
-        ), 400);
+        probar(handler, "PUT con ID inexistente",
+            evento(conPrefijo, "PUT", Long.toString(candidato), cambios), 404);
+        probar(handler, "POST con precio negativo", evento(conPrefijo, "POST", null, """
+            {"id":"%s","nombre":"Monitor","precio":-1}
+            """.formatted(id)), 400);
     }
 
-    private static Map<String, Object> consulta(String id) {
-        return Map.of("routeKey", "GET /productos/{id}", "pathParameters", Map.of("id", id));
+    private static Map<String, Object> evento(boolean conPrefijo, String metodo, String id, String cuerpo) {
+        String ruta = conPrefijo ? "/productos" : "/";
+        var evento = new LinkedHashMap<String, Object>();
+        evento.put("version", "2.0");
+        evento.put("routeKey", metodo + " " + ruta + (conPrefijo && id != null ? "/{id}" : ""));
+        evento.put("rawPath", conPrefijo && id != null ? ruta + "/" + id : ruta);
+        evento.put("requestContext", Map.of("http", Map.of("method", metodo)));
+        if (id != null) {
+            evento.put(conPrefijo ? "pathParameters" : "queryStringParameters", Map.of("id", id));
+        }
+        if (cuerpo != null) {
+            evento.put("body", cuerpo);
+        }
+        return evento;
     }
 
     private static void probar(CatalogoHandler handler, String etiqueta,

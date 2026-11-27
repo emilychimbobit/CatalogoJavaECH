@@ -1,6 +1,6 @@
 # Catálogo de productos en Java 21
 
-Este repositorio contiene el deber del **Día 2** resuelto. Úsalo como punto de partida del **Día 3** para configurar el despliegue continuo a AWS Lambda.
+Este repositorio contiene el deber del **Día 2** resuelto. Para la práctica del **Día 3**, puedes desplegar el catálogo a Lambda mediante un JAR y conectarlo a API Gateway con o sin el prefijo `/productos`.
 
 ## 1. Obtén tu copia del proyecto
 
@@ -17,14 +17,15 @@ cd CatalogoJavaECH
 
 Abre **Terminal → Nueva terminal** en VS Code. Comprueba que `java -version` y `javac -version` muestran 21. Si falta alguno, instala el [JDK 21 de Eclipse Temurin](https://adoptium.net/temurin/releases/?version=21).
 
-Ejecuta estas dos líneas desde la raíz del proyecto. Funcionan en PowerShell, macOS y Linux.
+Compila desde la raíz del proyecto y ejecuta la variante que corresponda a tu deber. Los comandos funcionan en PowerShell, macOS y Linux.
 
 ```sh
 javac -encoding UTF-8 -d target/classes src/academy/aws/CatalogoHandler.java src/academy/aws/DemoLocal.java
-java -cp target/classes academy.aws.DemoLocal 40
+java -cp target/classes academy.aws.DemoLocal 40 con-prefijo
+java -cp target/classes academy.aws.DemoLocal 41 sin-prefijo
 ```
 
-La demo simula llamadas a la Lambda y usa el mismo `productos.txt` durante toda la secuencia.
+Cada ejecución simula la secuencia completa de llamadas a Lambda con el esquema de rutas elegido y guarda sus datos en `productos.txt`.
 
 | Prueba | Resultado esperado |
 |---|---|
@@ -36,28 +37,40 @@ La demo simula llamadas a la Lambda y usa el mismo `productos.txt` durante toda 
 | Actualizar un ID inexistente | `404` |
 | Crear con precio negativo | `400` |
 
-Abre `productos.txt` y comprueba que el ID de la prueba aparece una sola vez con los datos actualizados. Para repetirla, usa un ID libre, por ejemplo `41`.
+Abre `productos.txt` y comprueba que cada ID utilizado aparece una sola vez con los datos actualizados. Para repetir una demo, usa otro ID libre, por ejemplo `42`.
 
 ## 3. Rutas del catálogo
 
-| Operación | Function URL | API Gateway |
+Elige el esquema que coincide con tu ejercicio. Las dos opciones de API Gateway usan el mismo controlador Java y el mismo JAR.
+
+| Operación | Con prefijo `/productos` | Sin prefijo `/productos` |
 |---|---|---|
-| Listar productos | `GET /` | `GET /productos` |
-| Consultar un producto | `GET /?id=40` | `GET /productos/40` |
-| Crear un producto | `POST /` | `POST /productos` |
-| Actualizar un producto guardado en el TXT | `PUT /?id=40` | `PUT /productos/40` |
+| Listar productos | `GET /productos` | `GET /` |
+| Consultar un producto | `GET /productos/40` | `GET /?id=40` |
+| Crear un producto | `POST /productos` | `POST /` |
+| Actualizar un producto guardado en el TXT | `PUT /productos/40` | `PUT /?id=40` |
+
+- **Con prefijo**. Crea en API Gateway las rutas `GET /productos`, `POST /productos`, `GET /productos/{id}` y `PUT /productos/{id}`. Al probar, reemplaza `{id}` por un número. Lambda recibe el ID en `pathParameters.id`.
+- **Sin prefijo**. Crea las rutas `GET /`, `POST /` y `PUT /`. Envíale `?id=40` a la URL cuando consultes o actualices un producto específico. Lambda recibe el ID en `queryStringParameters.id`. Usa este mismo formato para las pruebas con **Function URL**.
+
+Conecta todas las rutas de tu variante a la misma Lambda mediante una **HTTP API** con integración **Lambda proxy 2.0**. En Postman, agrega la ruta de prueba después de la URL de invocación de tu etapa.
 
 En POST, envía JSON con `id`, `nombre` y `precio`. En PUT, envía el ID en la URL y un cuerpo como `{"nombre":"Monitor HD","precio":195}`. POST rechaza IDs duplicados, incluidos los de los productos de ejemplo. PUT actualiza los productos creados en el TXT.
 
 La demo local escribe `productos.txt` en la carpeta del proyecto. En Lambda, el archivo se escribe en `/tmp` y cada entorno de ejecución tiene su propia copia. Valida la secuencia de escritura y lectura en local para reproducir los resultados.
 
-## 4. Continúa con el Día 3
+## 4. Empaqueta y sube el JAR a Lambda
 
-Ten a mano tu repositorio y el nombre y la región de tu Lambda. Sigue el Día 3 del [portal del curso](https://aws-developer-academy-liard.vercel.app/) para configurar GitHub Actions y desplegar desde tu propia copia.
+1. Ejecuta el comando de compilación del paso 2. Luego crea el JAR desde la raíz del proyecto.
 
-- Runtime de Lambda: **Java 21**.
-- Controlador: `academy.aws.CatalogoHandler::handleRequest`.
-- Para API Gateway, usa una **HTTP API** con integración Lambda proxy **2.0**. Registra las rutas de la tabla que quieras probar.
+   ```sh
+   jar --create --file target/catalogo-lambda.jar -C target/classes .
+   jar --list --file target/catalogo-lambda.jar
+   ```
 
-Si necesitas comprobar la integración existente desde **Probar** en Lambda, usa los eventos de ejemplo de la carpeta `eventos/`.
+   En el listado deben aparecer `academy/aws/CatalogoHandler.class` y `academy/aws/CatalogoHandler$Producto.class`. Regenera el JAR cada vez que cambies el código.
+2. En la consola de AWS, abre tu función en **Lambda → Código → Cargar desde → Archivo .zip o .jar** y selecciona `target/catalogo-lambda.jar`. Si descargas el artefacto `catalogo-lambda` de GitHub Actions, extrae el ZIP exterior. Dentro encontrarás `catalogo-lambda.zip`, que es el paquete de despliegue y contiene `lib/catalogo.jar`.
+3. Comprueba que el runtime sea **Java 21** y que el controlador sea `academy.aws.CatalogoHandler::handleRequest`.
+4. En **Probar**, ejecuta los eventos de ejemplo disponibles en [`eventos/`](eventos/). Después de integrar las rutas de tu variante en API Gateway, prueba una consulta en Postman. Para comprobar el PUT, primero crea un producto con un ID libre mediante POST.
 
+El flujo de GitHub Actions también se aborda en el [portal del curso](https://aws-developer-academy-liard.vercel.app/).
