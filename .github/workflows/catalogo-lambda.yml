@@ -1,236 +1,332 @@
-
 name: Catálogo Java · CI/CD
 
 on:
   pull_request:
     branches: [main]
+
   push:
     branches: [main]
+
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
+
+  # ============================================================
+  # CI
+  # Compila, prueba y empaqueta la Lambda
+  # ============================================================
   ci:
     name: Compilar, probar y empaquetar
     runs-on: ubuntu-latest
     timeout-minutes: 10
+
     steps:
-      - uses: actions/checkout@v5
+
+      - name: Descargar repositorio
+        uses: actions/checkout@v5
         with:
           persist-credentials: false
 
-      - uses: actions/setup-java@v5
+      - name: Configurar Java 21
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '21'
 
-      - name: Compilar y probar GET con el mismo evento que API Gateway
+      # ----------------------------------------------------------
+      # COMPILACIÓN
+      # ----------------------------------------------------------
+      - name: Compilar clases Java
         shell: bash
         run: |
-          mkdir -p build-ci/classes build-ci/package/lib
-          javac -encoding UTF-8 -d build-ci/classes src/academy/aws/*.java
+          mkdir -p build-ci/classes
+
+          javac \
+            -encoding UTF-8 \
+            -d build-ci/classes \
+            src/academy/aws/*.java
+
+          echo "Clases compiladas:"
+          find build-ci/classes -type f -name "*.class" -print
+
+      # ----------------------------------------------------------
+      # PRUEBAS
+      # Simula eventos recibidos desde API Gateway
+      # ----------------------------------------------------------
+      - name: Probar GET con el mismo evento que API Gateway
+        shell: bash
+        run: |
+
           cat > build-ci/VerificarCatalogo.java <<'JAVA'
           import academy.aws.CatalogoHandler;
+
           import java.util.Map;
 
           class VerificarCatalogo {
+
               public static void main(String[] args) {
+
                   var handler = new CatalogoHandler();
+
                   verificar(handler, "1", 200);
                   verificar(handler, "9999999999", 404);
                   verificar(handler, "abc", 400);
               }
 
-              private static void verificar(CatalogoHandler handler, String id, int esperado) {
+              private static void verificar(
+                      CatalogoHandler handler,
+                      String id,
+                      int esperado) {
+
                   Map<String, Object> evento = Map.of(
                       "version", "2.0",
                       "routeKey", "GET /productos/{id}",
-                      "requestContext", Map.of("http", Map.of("method", "GET")),
-                      "pathParameters", Map.of("id", id)
+                      "requestContext",
+                          Map.of(
+                              "http",
+                              Map.of(
+                                  "method", "GET"
+                              )
+                          ),
+                      "pathParameters",
+                          Map.of(
+                              "id", id
+                          )
                   );
+
                   var respuesta = handler.handleRequest(evento);
-                  if (!Integer.valueOf(esperado).equals(respuesta.get("statusCode"))) {
-                      throw new AssertionError("ID " + id + ": " + respuesta);
+
+                  if (!Integer.valueOf(esperado)
+                          .equals(respuesta.get("statusCode"))) {
+
+                      throw new AssertionError(
+                          "ID " + id + ": " + respuesta
+                      );
                   }
-                  System.out.println("ID " + id + " -> " + esperado);
+
+                  System.out.println(
+                      "ID " + id + " -> " + esperado
+                  );
               }
           }
           JAVA
+
           PRODUCTOS_FILE_PATH="$PWD/build-ci/productos-prueba.txt" \
-            java -cp build-ci/classes build-ci/VerificarCatalogo.java
+          java \
+            -cp build-ci/classes \
+            build-ci/VerificarCatalogo.java
 
-
-name: Catálogo Java · CI/CD
-
-on:
-  pull_request:
-    branches: [main]
-  push:
-    branches: [main]
-  workflow_dispatch:
-
-permissions:
-  contents: read
-
-jobs:
-  ci:
-    name: Compilar, probar y empaquetar
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          persist-credentials: false
-
-      - uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: '21'
-
-      - name: Compilar y probar GET con el mismo evento que API Gateway
+      # ----------------------------------------------------------
+      # EMPAQUETADO PARA AWS LAMBDA
+      #
+      # IMPORTANTE:
+      # CatalogoHandler.class queda directamente como:
+      #
+      # academy/aws/CatalogoHandler.class
+      #
+      # dentro del ZIP.
+      # ----------------------------------------------------------
+      - name: Empaquetar clases para Lambda
         shell: bash
         run: |
-          mkdir -p build-ci/classes build-ci/package/lib
-          javac -encoding UTF-8 -d build-ci/classes src/academy/aws/*.java
-          cat > build-ci/VerificarCatalogo.java <<'JAVA'
-          import academy.aws.CatalogoHandler;
-          import java.util.Map;
 
-          class VerificarCatalogo {
-              public static void main(String[] args) {
-                  var handler = new CatalogoHandler();
-                  verificar(handler, "1", 200);
-                  verificar(handler, "9999999999", 404);
-                  verificar(handler, "abc", 400);
-              }
+          rm -f build-ci/catalogo-lambda.zip
 
-              private static void verificar(CatalogoHandler handler, String id, int esperado) {
-                  Map<String, Object> evento = Map.of(
-                      "version", "2.0",
-                      "routeKey", "GET /productos/{id}",
-                      "requestContext", Map.of("http", Map.of("method", "GET")),
-                      "pathParameters", Map.of("id", id)
-                  );
-                  var respuesta = handler.handleRequest(evento);
-                  if (!Integer.valueOf(esperado).equals(respuesta.get("statusCode"))) {
-                      throw new AssertionError("ID " + id + ": " + respuesta);
-                  }
-                  System.out.println("ID " + id + " -> " + esperado);
-              }
-          }
-          JAVA
-          PRODUCTOS_FILE_PATH="$PWD/build-ci/productos-prueba.txt" \
-            java -cp build-ci/classes build-ci/VerificarCatalogo.java
-
-      - name: Empaquetar todas las clases para Lambda
-        shell: bash
-        run: |
           (
             cd build-ci/classes
-            zip -q -r ../catalogo-lambda.zip academy
+
+            zip \
+              -q \
+              -r \
+              ../catalogo-lambda.zip \
+              academy
           )
-      
-          echo "Contenido del ZIP:"
+
+          echo "Contenido del paquete Lambda:"
           unzip -l build-ci/catalogo-lambda.zip
-      
+
+      # ----------------------------------------------------------
+      # VALIDAR QUE EL HANDLER ESTÁ EN EL ZIP
+      # ----------------------------------------------------------
+      - name: Validar paquete Lambda
+        shell: bash
+        run: |
+
+          echo "Buscando CatalogoHandler.class..."
+
           unzip -l build-ci/catalogo-lambda.zip |
-            grep -q 'academy/aws/CatalogoHandler.class'
+            grep -q "academy/aws/CatalogoHandler.class"
 
-      - uses: actions/upload-artifact@v4
+          echo "OK: CatalogoHandler.class está dentro del ZIP"
+
+      # ----------------------------------------------------------
+      # GUARDAR ARTEFACTO
+      # ----------------------------------------------------------
+      - name: Guardar artefacto Lambda
+        uses: actions/upload-artifact@v4
         with:
           name: catalogo-lambda
           path: build-ci/catalogo-lambda.zip
           if-no-files-found: error
           retention-days: 7
 
+
+  # ============================================================
+  # CD
+  # Despliega únicamente cuando se hace push a main
+  # ============================================================
   cd:
     name: Desplegar y verificar Lambda
-    if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && vars.AWS_DEPLOY_ROLE_ARN != '' }}
+
+    if: >-
+      ${{
+        github.ref == 'refs/heads/main' &&
+        github.event_name != 'pull_request' &&
+        vars.AWS_DEPLOY_ROLE_ARN != ''
+      }}
+
     needs: ci
+
     runs-on: ubuntu-latest
+
     timeout-minutes: 10
+
     permissions:
       id-token: write
       contents: read
+
     concurrency:
       group: catalogo-lambda-deploy
       cancel-in-progress: false
+
     env:
       LAMBDA_FUNCTION_NAME: ${{ vars.LAMBDA_FUNCTION_NAME }}
       AWS_PAGER: ''
+
     steps:
-      - uses: actions/download-artifact@v4
+
+      # ----------------------------------------------------------
+      # DESCARGAR ZIP GENERADO EN CI
+      # ----------------------------------------------------------
+      - name: Descargar paquete Lambda
+        uses: actions/download-artifact@v4
         with:
           name: catalogo-lambda
 
-      - uses: aws-actions/configure-aws-credentials@v6
+      # ----------------------------------------------------------
+      # COMPROBAR PAQUETE DESCARGADO
+      # ----------------------------------------------------------
+      - name: Verificar paquete descargado
+        shell: bash
+        run: |
+
+          echo "Archivos descargados:"
+          ls -la
+
+          echo "Contenido del ZIP:"
+          unzip -l catalogo-lambda.zip
+
+          unzip -l catalogo-lambda.zip |
+            grep -q "academy/aws/CatalogoHandler.class"
+
+      # ----------------------------------------------------------
+      # AUTENTICACIÓN AWS MEDIANTE OIDC
+      # ----------------------------------------------------------
+      - name: Configurar credenciales AWS
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
 
-      - name: Actualizar la función existente y esperar el despliegue
+      # ----------------------------------------------------------
+      # CONFIGURAR HANDLER
+      # ----------------------------------------------------------
+      - name: Configurar Handler de Lambda
         shell: bash
         run: |
-          aws lambda update-function-code --function-name "${LAMBDA_FUNCTION_NAME:?Configura LAMBDA_FUNCTION_NAME}" \
-            --zip-file fileb://catalogo-lambda.zip --query '{Funcion:FunctionName,Huella:CodeSha256}'
-          aws lambda wait function-updated --function-name "$LAMBDA_FUNCTION_NAME"
 
+          aws lambda update-function-configuration \
+            --function-name "${LAMBDA_FUNCTION_NAME:?Configura LAMBDA_FUNCTION_NAME}" \
+            --handler "academy.aws.CatalogoHandler::handleRequest"
+
+          aws lambda wait function-updated \
+            --function-name "$LAMBDA_FUNCTION_NAME"
+
+      # ----------------------------------------------------------
+      # ACTUALIZAR CÓDIGO
+      # ----------------------------------------------------------
+      - name: Actualizar código Lambda
+        shell: bash
+        run: |
+
+          aws lambda update-function-code \
+            --function-name "${LAMBDA_FUNCTION_NAME:?Configura LAMBDA_FUNCTION_NAME}" \
+            --zip-file fileb://catalogo-lambda.zip \
+            --query '{Funcion:FunctionName,Huella:CodeSha256}'
+
+          aws lambda wait function-updated \
+            --function-name "$LAMBDA_FUNCTION_NAME"
+
+      # ----------------------------------------------------------
+      # MOSTRAR CONFIGURACIÓN FINAL
+      # ----------------------------------------------------------
+      - name: Verificar configuración Lambda
+        shell: bash
+        run: |
+
+          aws lambda get-function-configuration \
+            --function-name "$LAMBDA_FUNCTION_NAME" \
+            --query '{
+              Funcion:FunctionName,
+              Runtime:Runtime,
+              Handler:Handler,
+              Estado:State,
+              UltimaActualizacion:LastUpdateStatus
+            }'
+
+      # ----------------------------------------------------------
+      # PRUEBA REAL DE LA LAMBDA DESPLEGADA
+      # ----------------------------------------------------------
       - name: Comprobar que el catálogo desplegado responde
         shell: bash
         run: |
-          aws lambda invoke --function-name "$LAMBDA_FUNCTION_NAME" \
+
+          aws lambda invoke \
+            --function-name "$LAMBDA_FUNCTION_NAME" \
             --cli-binary-format raw-in-base64-out \
-            --payload '{"version":"2.0","requestContext":{"http":{"method":"GET"}},"pathParameters":{"id":"1"}}' \
-            respuesta.json > invocacion.json
-          jq -e '.StatusCode == 200 and (has("FunctionError") | not)' invocacion.json
-          jq -e '.statusCode == 200 and (.body | fromjson | .id == 1)' respuesta.json
-      - uses: actions/upload-artifact@v4
-        with:
-          name: catalogo-lambda
-          path: build-ci/catalogo-lambda.zip
-          if-no-files-found: error
-          retention-days: 7
+            --payload '{
+              "version":"2.0",
+              "routeKey":"GET /productos/{id}",
+              "requestContext":{
+                "http":{
+                  "method":"GET"
+                }
+              },
+              "pathParameters":{
+                "id":"1"
+              }
+            }' \
+            respuesta.json \
+            > invocacion.json
 
-  cd:
-    name: Desplegar y verificar Lambda
-    if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && vars.AWS_DEPLOY_ROLE_ARN != '' }}
-    needs: ci
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      id-token: write
-      contents: read
-    concurrency:
-      group: catalogo-lambda-deploy
-      cancel-in-progress: false
-    env:
-      LAMBDA_FUNCTION_NAME: ${{ vars.LAMBDA_FUNCTION_NAME }}
-      AWS_PAGER: ''
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: catalogo-lambda
+          echo "Resultado de invocación:"
+          cat invocacion.json
 
-      - uses: aws-actions/configure-aws-credentials@v6
-        with:
-          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
-          aws-region: ${{ vars.AWS_REGION }}
+          echo
+          echo "Respuesta Lambda:"
+          cat respuesta.json
 
-      - name: Actualizar la función existente y esperar el despliegue
-        shell: bash
-        run: |
-          aws lambda update-function-code --function-name "${LAMBDA_FUNCTION_NAME:?Configura LAMBDA_FUNCTION_NAME}" \
-            --zip-file fileb://catalogo-lambda.zip --query '{Funcion:FunctionName,Huella:CodeSha256}'
-          aws lambda wait function-updated --function-name "$LAMBDA_FUNCTION_NAME"
+          echo
 
-      - name: Comprobar que el catálogo desplegado responde
-        shell: bash
-        run: |
-          aws lambda invoke --function-name "$LAMBDA_FUNCTION_NAME" \
-            --cli-binary-format raw-in-base64-out \
-            --payload '{"version":"2.0","requestContext":{"http":{"method":"GET"}},"pathParameters":{"id":"1"}}' \
-            respuesta.json > invocacion.json
-          jq -e '.StatusCode == 200 and (has("FunctionError") | not)' invocacion.json
-          jq -e '.statusCode == 200 and (.body | fromjson | .id == 1)' respuesta.json
+          jq -e \
+            '.StatusCode == 200 and (has("FunctionError") | not)' \
+            invocacion.json
+
+          jq -e \
+            '.statusCode == 200 and (.body | fromjson | .id == 1)' \
+            respuesta.json
+
+          echo "OK: Lambda desplegada y funcionando correctamente"
