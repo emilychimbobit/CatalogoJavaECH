@@ -59,7 +59,14 @@ En POST, envía JSON con `id`, `nombre` y `precio`. En PUT, envía el ID en la U
 
 La demo local escribe `productos.txt` en la carpeta del proyecto. En Lambda, el archivo se escribe en `/tmp` y cada entorno de ejecución tiene su propia copia. Valida la secuencia de escritura y lectura en local para reproducir los resultados.
 
-## 4. Empaqueta y sube el JAR a Lambda
+## 4. Descarga el ZIP y súbelo a Lambda
+
+1. En GitHub, abre **Actions → Catálogo Java · CI/CD → Run workflow**. Elige la rama `main` y deja desmarcado **Desplegar el ZIP en AWS Lambda** para generar el paquete.
+2. En la ejecución exitosa, baja a **Artifacts** y descarga **`catalogo-lambda.zip`**. Para comprobar la descarga, abre el ZIP. En la raíz debe aparecer `lib/`, con `catalogo.jar` dentro.
+3. En tu función de AWS, ve a **Código → Cargar desde → Archivo .zip o .jar** y sube **`catalogo-lambda.zip`** entero.
+4. Confirma **Java 21** y el handler `academy.aws.CatalogoHandler::handleRequest`. En **Probar**, usa un evento de ejemplo de [`eventos/`](eventos/).
+
+## 5. Genera el JAR en tu computadora
 
 1. Ejecuta el comando de compilación del paso 2. Luego crea el JAR desde la raíz del proyecto.
 
@@ -69,7 +76,7 @@ La demo local escribe `productos.txt` en la carpeta del proyecto. En Lambda, el 
    ```
 
    En el listado deben aparecer `academy/aws/CatalogoHandler.class` y `academy/aws/CatalogoHandler$Producto.class`. Regenera el JAR cada vez que cambies el código.
-2. En la consola de AWS, abre tu función en **Lambda → Código → Cargar desde → Archivo .zip o .jar** y selecciona `target/catalogo-lambda.jar`. También puedes abrir **GitHub → Actions → ejecución del catálogo → Artifacts**, descargar **`catalogo-lambda-jar`**, extraer la descarga y subir el archivo **`catalogo-lambda.jar`** que viene dentro. El artefacto `catalogo-lambda` contiene el ZIP que usa el despliegue automático.
+2. En la consola de AWS, abre tu función en **Lambda → Código → Cargar desde → Archivo .zip o .jar** y selecciona `target/catalogo-lambda.jar`. También puedes abrir **GitHub → Actions → ejecución del catálogo → Artifacts**, descargar **`catalogo-lambda-jar`**, extraer la descarga y subir el archivo **`catalogo-lambda.jar`** que viene dentro.
 3. Comprueba que el runtime sea **Java 21** y que el controlador sea `academy.aws.CatalogoHandler::handleRequest`.
    Si Lambda muestra `ClassNotFoundException`, compara el nombre de clase del error con el controlador de **Configuración del entorno de ejecución → Editar**. Para este proyecto, `jar --list --file catalogo-lambda.jar` debe mostrar `academy/aws/CatalogoHandler.class` y `academy/aws/CatalogoHandler$Producto.class`. Ejecuta el comando desde la carpeta en la que guardaste el JAR.
 4. En **Probar**, ejecuta los eventos de ejemplo disponibles en [`eventos/`](eventos/). Después de integrar las rutas de tu variante en API Gateway, prueba una consulta en Postman. Para comprobar el PUT, primero crea un producto con un ID libre mediante POST.

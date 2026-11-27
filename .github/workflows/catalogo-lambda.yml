@@ -6,6 +6,11 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      deploy:
+        description: Desplegar el ZIP en AWS Lambda
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -87,11 +92,11 @@ jobs:
           PRODUCTOS_FILE_PATH="$PWD/build-ci/productos-prueba.txt" \
             java -cp build-ci/verificado/lib/catalogo.jar build-ci/VerificarCatalogo.java
 
-      - name: Guardar ZIP
-        uses: actions/upload-artifact@v4
+      - name: Publicar el ZIP listo para Lambda
+        uses: actions/upload-artifact@v7
         with:
-          name: catalogo-lambda
           path: build-ci/catalogo-lambda.zip
+          archive: false
           if-no-files-found: error
           retention-days: 7
 
@@ -105,7 +110,9 @@ jobs:
 
   cd:
     name: Desplegar y verificar Lambda
-    if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && vars.AWS_DEPLOY_ROLE_ARN != '' }}
+    if: >-
+      ${{ github.ref == 'refs/heads/main' && vars.AWS_DEPLOY_ROLE_ARN != '' &&
+          (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.deploy)) }}
     needs: ci
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -123,15 +130,17 @@ jobs:
       AWS_PAGER: ''
 
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
-          name: catalogo-lambda
+          name: catalogo-lambda.zip
+          skip-decompress: true
 
       - name: Verificar ZIP descargado
         shell: bash
         run: |
-          unzip -l catalogo-lambda.zip
-          unzip -l catalogo-lambda.zip | grep -q 'lib/catalogo.jar'
+          unzip -t catalogo-lambda.zip
+          unzip -Z -1 catalogo-lambda.zip > contenido-zip.txt
+          grep -Fx 'lib/catalogo.jar' contenido-zip.txt
 
       - uses: aws-actions/configure-aws-credentials@v6
         with:
