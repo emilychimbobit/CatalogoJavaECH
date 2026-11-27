@@ -69,8 +69,9 @@ La demo local escribe `productos.txt` en la carpeta del proyecto. En Lambda, el 
    ```
 
    En el listado deben aparecer `academy/aws/CatalogoHandler.class` y `academy/aws/CatalogoHandler$Producto.class`. Regenera el JAR cada vez que cambies el código.
-2. En la consola de AWS, abre tu función en **Lambda → Código → Cargar desde → Archivo .zip o .jar** y selecciona `target/catalogo-lambda.jar`. Si descargas el artefacto `catalogo-lambda` de GitHub Actions, extrae el ZIP exterior. Dentro encontrarás `catalogo-lambda.zip`, que es el paquete de despliegue y contiene `lib/catalogo.jar`.
+2. En la consola de AWS, abre tu función en **Lambda → Código → Cargar desde → Archivo .zip o .jar** y selecciona `target/catalogo-lambda.jar`. También puedes abrir **GitHub → Actions → ejecución del catálogo → Artifacts**, descargar **`catalogo-lambda-jar`**, extraer la descarga y subir el archivo **`catalogo-lambda.jar`** que viene dentro. El artefacto `catalogo-lambda` contiene el ZIP que usa el despliegue automático.
 3. Comprueba que el runtime sea **Java 21** y que el controlador sea `academy.aws.CatalogoHandler::handleRequest`.
+   Si Lambda muestra `ClassNotFoundException`, compara el nombre de clase del error con el controlador de **Configuración del entorno de ejecución → Editar**. Para este proyecto, `jar --list --file catalogo-lambda.jar` debe mostrar `academy/aws/CatalogoHandler.class` y `academy/aws/CatalogoHandler$Producto.class`. Ejecuta el comando desde la carpeta en la que guardaste el JAR.
 4. En **Probar**, ejecuta los eventos de ejemplo disponibles en [`eventos/`](eventos/). Después de integrar las rutas de tu variante en API Gateway, prueba una consulta en Postman. Para comprobar el PUT, primero crea un producto con un ID libre mediante POST.
 
 El flujo de GitHub Actions también se aborda en el [portal del curso](https://aws-developer-academy-liard.vercel.app/).
